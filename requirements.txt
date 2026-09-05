@@ -1,0 +1,6 @@
+feedparser
+requests
+beautifulsoup4
+lxml
+openai>=1.40.0
+python-dotenv
