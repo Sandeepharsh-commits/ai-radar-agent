@@ -1,7 +1,7 @@
 """
 run_digest.py
 -------------
-Fetch → summarize → email. One command for Colab or GitHub Actions.
+Fetch → summarize → email.
 """
 from __future__ import annotations
 
@@ -17,11 +17,23 @@ from summarize import digest_to_html, digest_to_text, summarize_items
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-email", action="store_true", help="Print digest only")
+    parser.add_argument("--fresh", action="store_true", help="Ignore seen_links")
+    parser.add_argument("--no-save", action="store_true", help="Do not write agent_state.json")
+    parser.add_argument(
+        "--lookback-hours",
+        type=int,
+        default=None,
+        help="Include RSS items published in this many hours (manual runs use 24)",
+    )
     args = parser.parse_args()
 
     print("1/3 Fetching updates...")
-    items = fetch_all_updates()
-    print(f"    {len(items)} new/changed item(s)")
+    items = fetch_all_updates(
+        ignore_seen=args.fresh or args.lookback_hours is not None,
+        persist=not args.no_save and args.lookback_hours is None,
+        lookback_hours=args.lookback_hours,
+    )
+    print(f"    {len(items)} item(s)")
 
     print("2/3 Asking gpt-4.1-mini to write the digest...")
     digest = summarize_items(items)
