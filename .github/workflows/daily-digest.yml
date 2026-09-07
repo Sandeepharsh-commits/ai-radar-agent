@@ -5,7 +5,6 @@ on:
     - cron: "30 2 * * 1-5"
   workflow_dispatch:
 
-# Prevent two runs from updating agent_state.json simultaneously
 concurrency:
   group: ai-radar-state
   cancel-in-progress: false
@@ -13,6 +12,7 @@ concurrency:
 jobs:
   digest:
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
 
@@ -42,18 +42,17 @@ jobs:
       - name: Persist seen-state
         run: |
           git config user.name "ai-radar-agent"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "ai-radar-agent@users.noreply.github.com"
 
           git add agent_state.json
 
           if git diff --cached --quiet; then
-            echo "No state changes to commit."
+            echo "No state changes."
             exit 0
           fi
 
           git commit -m "state: $(date -u +%F)"
 
-          # Get latest changes before pushing
           git pull --rebase origin main
 
           git push origin main
