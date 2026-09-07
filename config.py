@@ -9,6 +9,34 @@ REQUEST_TIMEOUT = 15
 MAX_RSS_ENTRIES = 10
 SEEN_LINKS_CAP = 500
 
+ALLOWED_DOMAINS = {
+    "microsoft.com",
+    "azure.microsoft.com",
+    "learn.microsoft.com",
+    "techcommunity.microsoft.com",
+    "devblogs.microsoft.com",
+    "github.com",
+    "techcrunch.com",
+    "venturebeat.com",
+    "feedburner.com",
+}
+
+TRACKING_PARAMS = {
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_content",
+    "utm_term",
+    "utm_id",
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+    "ocid",
+    "ref",
+    "ref_src",
+}
+
 RSS_FEEDS = {
     "Azure Updates": "https://www.microsoft.com/releasecommunications/api/v2/azure/rss",
     "MS Tech Community - AI": "https://techcommunity.microsoft.com/t5/s/gxcuf89792/rss/board?board.id=AIPlatformBlog",
