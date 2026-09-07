@@ -56,9 +56,7 @@ jobs:
           echo "Checking agent_state.json..."
           if [ -f agent_state.json ]; then
             echo "agent_state.json exists."
-            echo "File size:"
             wc -c agent_state.json
-            echo "Seen links:"
             python - <<'PY'
           import json
           with open("agent_state.json", "r", encoding="utf-8") as f:
@@ -75,18 +73,12 @@ jobs:
         run: |
           git config user.name "ai-radar-agent"
           git config user.email "ai-radar-agent@users.noreply.github.com"
-          echo "Adding agent_state.json..."
           git add agent_state.json
           if git diff --cached --quiet; then
             echo "No state changes detected."
             exit 0
           fi
-          echo "Creating state commit..."
           git commit -m "state: $(date -u +%F)"
-          echo "Fetching latest main..."
           git fetch origin main
-          echo "Rebasing local state commit onto latest main..."
           git rebase origin/main
-          echo "Pushing updated state..."
           git push origin HEAD:main
-          echo "State successfully persisted."
