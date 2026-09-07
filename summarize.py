@@ -1,144 +1,84 @@
 """
-summarize.py
-------------
-Send new items to Azure Foundry gpt-4.1-mini and get a ranked digest
-aimed at an Azure integration developer.
+Drop-in replacement for the rendering half of summarize.py.
+Keep everything above `def digest_to_text` unchanged — only these
+two functions (plus the new `_tag_service` helper) are new.
 """
 from __future__ import annotations
 
-import json
-import os
 from datetime import date
 
-from openai import AzureOpenAI, OpenAI
 
+# ---- service tagging -------------------------------------------------
 
-SYSTEM_PROMPT = """You are AI Radar for Sunny, an Azure integration developer.
-He cares about: Azure API Management, Logic Apps, Service Bus, Event Grid,
-Azure Functions, Integration Service Environment patterns, AI gateway / MCP
-in APIM, connectors, and how industry AI changes affect integration work.
+_SERVICE_RULES = [
+    ("APIM / AI Gateway", ("api management", "apim", "ai gateway", "mcp")),
+    ("Logic Apps", ("logic app",)),
+    ("Service Bus", ("service bus",)),
+    ("Event Grid", ("event grid",)),
+    ("Functions", ("azure function", "functions app", "durable function")),
+    ("Integration Patterns", ("integration service environment", "ise ")),
+    ("Industry AI", ("openai", "gpt-", "llm", "model", "anthropic", "claude", "gemini")),
+]
+_DEFAULT_SERVICE = "Other"
 
-Given raw news items, produce a plain-language daily digest.
-
-Return JSON only with this shape:
-{
-  "intro": "2-4 sentences on what mattered today for an Azure integration developer",
-  "must_know": [
-    {
-      "title": "short title",
-      "why_it_matters": "1-2 sentences tied to integration work",
-      "link": "original url",
-      "source": "source name"
-    }
-  ],
-  "worth_watching": [
-    {
-      "title": "short title",
-      "why_it_matters": "1 sentence",
-      "link": "original url",
-      "source": "source name"
-    }
-  ],
-  "skip_reason": "optional one-liner if the day was quiet"
+_SERVICE_COLORS = {
+    "APIM / AI Gateway": "#0078d4",
+    "Logic Apps": "#8764b8",
+    "Service Bus": "#00b294",
+    "Event Grid": "#ca5010",
+    "Functions": "#ffb900",
+    "Integration Patterns": "#498205",
+    "Industry AI": "#e3008c",
+    "Other": "#767676",
 }
 
-Rules:
-- Prefer primary Microsoft / Azure sources over reprints
-- Rank APIM, Logic Apps, Service Bus, Functions, Event Grid, AI-gateway first
-- Industry AI news only if it changes tools, models, or architecture he might use
-- No hype, no emojis, no invented facts
-- If an item is a noisy marketing post, leave it out
-- Use the provided links unchanged
-- Keep must_know to at most 6 items, worth_watching to at most 6
-"""
+
+def _tag_service(item: dict) -> str:
+    haystack = f"{item.get('title', '')} {item.get('why_it_matters', '')}".lower()
+    for service, keywords in _SERVICE_RULES:
+        if any(k in haystack for k in keywords):
+            return service
+    return _DEFAULT_SERVICE
 
 
-def _client():
-    endpoint = os.environ["AZURE_OPENAI_ENDPOINT"].rstrip("/")
-    api_key = os.environ["AZURE_OPENAI_API_KEY"]
-    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
-
-    # Foundry v1-style endpoint
-    if endpoint.endswith("/openai/v1") or "services.ai.azure.com" in endpoint:
-        base = endpoint if endpoint.endswith("/openai/v1") else f"{endpoint}/openai/v1"
-        return OpenAI(base_url=base if base.endswith("/") else base + "/", api_key=api_key)
-
-    return AzureOpenAI(
-        azure_endpoint=endpoint,
-        api_key=api_key,
-        api_version=api_version,
-    )
+def _group_by_service(items: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for item in items:
+        grouped.setdefault(_tag_service(item), []).append(item)
+    return grouped
 
 
-def summarize_items(items: list[dict]) -> dict:
-    if not items:
-        return {
-            "intro": "No new items passed the filter today.",
-            "must_know": [],
-            "worth_watching": [],
-            "skip_reason": "Quiet day — state file already had these links.",
-        }
-
-    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1-mini")
-    payload = [
-        {
-            "source": item.get("source"),
-            "type": item.get("type"),
-            "title": item.get("title"),
-            "link": item.get("link"),
-            "published": item.get("published"),
-            "summary": item.get("summary", "")[:500],
-        }
-        for item in items[:40]
-    ]
-
-    client = _client()
-    response = client.chat.completions.create(
-        model=deployment,
-        temperature=0.2,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"Date: {date.today().isoformat()}\n"
-                    f"Items:\n{json.dumps(payload, ensure_ascii=False)}"
-                ),
-            },
-        ],
-    )
-    raw = response.choices[0].message.content or "{}"
-    data = json.loads(raw)
-    data.setdefault("intro", "")
-    data.setdefault("must_know", [])
-    data.setdefault("worth_watching", [])
-    return data
-
+# ---- plain text --------------------------------------------------------
 
 def digest_to_text(digest: dict, run_date: str | None = None) -> str:
     run_date = run_date or date.today().isoformat()
-    lines = [f"AI Radar Digest — {run_date}", "", digest.get("intro", "").strip(), ""]
-
     must = digest.get("must_know") or []
-    if must:
-        lines.append("MUST KNOW")
-        lines.append("---------")
-        for item in must:
-            lines.append(f"* {item.get('title')}")
-            lines.append(f"  {item.get('why_it_matters')}")
-            lines.append(f"  {item.get('link')}  ({item.get('source')})")
-            lines.append("")
-
     watch = digest.get("worth_watching") or []
+
+    lines = [
+        f"AI Radar Digest — {run_date}",
+        f"{len(must)} must-know · {len(watch)} worth watching",
+        "",
+        digest.get("intro", "").strip(),
+        "",
+    ]
+
+    def render_group(items: list[dict], heading: str):
+        lines.append(heading)
+        lines.append("=" * len(heading))
+        grouped = _group_by_service(items)
+        for service, group_items in grouped.items():
+            lines.append(f"\n[{service}]")
+            for item in group_items:
+                lines.append(f"* {item.get('title')}")
+                lines.append(f"  {item.get('why_it_matters')}")
+                lines.append(f"  {item.get('link')}  ({item.get('source')})")
+        lines.append("")
+
+    if must:
+        render_group(must, "MUST KNOW")
     if watch:
-        lines.append("WORTH WATCHING")
-        lines.append("--------------")
-        for item in watch:
-            lines.append(f"* {item.get('title')}")
-            lines.append(f"  {item.get('why_it_matters')}")
-            lines.append(f"  {item.get('link')}  ({item.get('source')})")
-            lines.append("")
+        render_group(watch, "WORTH WATCHING")
 
     if digest.get("skip_reason") and not must and not watch:
         lines.append(digest["skip_reason"])
@@ -147,36 +87,120 @@ def digest_to_text(digest: dict, run_date: str | None = None) -> str:
     return "\n".join(lines)
 
 
+# ---- html ---------------------------------------------------------------
+
+def _item_card(item: dict, accent: str) -> str:
+    title = item.get("title", "")
+    link = item.get("link", "#")
+    why = item.get("why_it_matters", "")
+    source = item.get("source", "")
+    return f"""
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+           style="margin:0 0 10px 0;background:#ffffff;border:1px solid #e8e8e8;
+                  border-left:3px solid {accent};border-radius:6px;">
+      <tr>
+        <td style="padding:14px 16px;">
+          <a href="{link}" style="color:#1a1a1a;font-size:15px;font-weight:600;
+             text-decoration:none;line-height:1.4;">{title}</a>
+          <p style="margin:6px 0 8px;color:#4a4a4a;font-size:13.5px;line-height:1.5;">{why}</p>
+          <span style="display:inline-block;color:#8a8a8a;font-size:11.5px;
+                text-transform:uppercase;letter-spacing:.04em;">{source}</span>
+        </td>
+      </tr>
+    </table>"""
+
+
+def _service_section(items: list[dict], accent: str) -> str:
+    grouped = _group_by_service(items)
+    blocks = []
+    for service, group_items in grouped.items():
+        color = _SERVICE_COLORS.get(service, accent)
+        cards = "".join(_item_card(i, color) for i in group_items)
+        blocks.append(f"""
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 18px;">
+          <tr><td style="padding:0 0 8px 2px;">
+            <span style="display:inline-block;background:{color}1a;color:{color};
+                  font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+                  padding:3px 9px;border-radius:12px;">{service}</span>
+          </td></tr>
+          <tr><td>{cards}</td></tr>
+        </table>""")
+    return "".join(blocks)
+
+
 def digest_to_html(digest: dict, run_date: str | None = None) -> str:
     run_date = run_date or date.today().isoformat()
+    must = digest.get("must_know") or []
+    watch = digest.get("worth_watching") or []
 
-    def items_html(items):
-        blocks = []
-        for item in items:
-            title = item.get("title", "")
-            link = item.get("link", "#")
-            why = item.get("why_it_matters", "")
-            source = item.get("source", "")
-            blocks.append(
-                f'<p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;">'
-                f'<a href="{link}" style="color:#0b3d91;font-weight:700;text-decoration:none;">{title}</a><br>'
-                f"{why}<br>"
-                f'<span style="color:#666;font-size:12px;">{source}</span></p>'
-            )
-        return "\n".join(blocks)
+    must_html = _service_section(must, "#d13438") if must else \
+        '<p style="color:#8a8a8a;font-size:14px;">Nothing urgent today.</p>'
+    watch_html = _service_section(watch, "#0078d4") if watch else \
+        '<p style="color:#8a8a8a;font-size:14px;">No extra items.</p>'
 
-    must = items_html(digest.get("must_know") or [])
-    watch = items_html(digest.get("worth_watching") or [])
     return f"""<!DOCTYPE html>
-<html><body style="font-family:Segoe UI,Arial,sans-serif;color:#222;background:#f4f4f4;margin:0;padding:24px;">
-  <div style="max-width:640px;margin:0 auto;background:#fff;padding:28px;border:1px solid #e1e1e1;">
-    <p style="margin:0 0 4px;color:#0078d4;font-size:12px;letter-spacing:.08em;text-transform:uppercase;">AI Radar</p>
-    <h1 style="margin:0 0 16px;font-size:24px;">Your AI Radar Digest – {run_date}</h1>
-    <p style="font-size:16px;line-height:1.55;">{digest.get("intro","")}</p>
-    <h2 style="font-size:16px;border-bottom:1px solid #eee;padding-bottom:6px;">Must know</h2>
-    {must or "<p>Nothing urgent today.</p>"}
-    <h2 style="font-size:16px;border-bottom:1px solid #eee;padding-bottom:6px;">Worth watching</h2>
-    {watch or "<p>No extra items.</p>"}
-    <p style="color:#888;font-size:12px;margin-top:28px;">Generated by AI Radar Agent. Azure used only for the LLM.</p>
-  </div>
-</body></html>"""
+<html>
+<body style="margin:0;padding:0;background:#eef1f4;font-family:'Segoe UI',Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef1f4;padding:24px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="640" cellpadding="0" cellspacing="0"
+               style="max-width:640px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;
+                      box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+
+          <!-- header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#0b3d91,#0078d4);padding:28px 32px;">
+              <p style="margin:0 0 6px;color:#cfe4ff;font-size:11px;font-weight:700;
+                        letter-spacing:.12em;text-transform:uppercase;">AI Radar</p>
+              <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;">
+                Digest — {run_date}
+              </h1>
+              <p style="margin:10px 0 0;color:#d8e7fb;font-size:13px;">
+                {len(must)} must-know &nbsp;·&nbsp; {len(watch)} worth watching
+              </p>
+            </td>
+          </tr>
+
+          <!-- intro -->
+          <tr>
+            <td style="padding:24px 32px 4px;">
+              <p style="margin:0;color:#333;font-size:15px;line-height:1.6;">{digest.get("intro","")}</p>
+            </td>
+          </tr>
+
+          <!-- must know -->
+          <tr>
+            <td style="padding:20px 32px 4px;">
+              <h2 style="margin:0 0 12px;font-size:14px;color:#d13438;font-weight:700;
+                         letter-spacing:.03em;text-transform:uppercase;border-bottom:2px solid #f3d3d4;
+                         padding-bottom:6px;">Must Know</h2>
+              {must_html}
+            </td>
+          </tr>
+
+          <!-- worth watching -->
+          <tr>
+            <td style="padding:8px 32px 24px;">
+              <h2 style="margin:0 0 12px;font-size:14px;color:#0078d4;font-weight:700;
+                         letter-spacing:.03em;text-transform:uppercase;border-bottom:2px solid #cfe4ff;
+                         padding-bottom:6px;">Worth Watching</h2>
+              {watch_html}
+            </td>
+          </tr>
+
+          <!-- footer -->
+          <tr>
+            <td style="padding:16px 32px 24px;border-top:1px solid #eee;">
+              <p style="margin:0;color:#9a9a9a;font-size:11.5px;">
+                Generated by AI Radar Agent · Azure used only for the LLM.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
