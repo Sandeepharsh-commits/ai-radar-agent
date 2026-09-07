@@ -1,7 +1,7 @@
 """
 fetch_hybrid.py
 ---------------
-Orchestrator. Public API is unchanged: fetch_all_updates().
+Orchestrator. Public API: fetch_all_updates().
 """
 from datetime import datetime
 
@@ -20,11 +20,27 @@ __all__ = [
 ]
 
 
-def fetch_all_updates():
+def fetch_all_updates(ignore_seen=False, persist=True, lookback_hours=None):
     state = load_state()
-    rss_items = fetch_rss_updates(state)
-    crawl_items = fetch_crawl_updates(state)
-    save_state(state)
+    if ignore_seen or lookback_hours:
+        print("[fresh] not using seen_links to hide items")
+        working = {
+            "seen_links": [],
+            "page_hashes": dict(state.get("page_hashes", {})),
+        }
+    else:
+        working = state
+
+    rss_items = fetch_rss_updates(working, lookback_hours=lookback_hours)
+    crawl_items = []
+    if not lookback_hours:
+        crawl_items = fetch_crawl_updates(working)
+
+    if persist and not lookback_hours:
+        save_state(working)
+    else:
+        print("[fresh] state file not updated")
+
     return rss_items + crawl_items
 
 
